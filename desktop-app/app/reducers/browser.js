@@ -1,9 +1,6 @@
 // @flow
 import {ipcRenderer, remote} from 'electron';
 import settings from 'electron-settings';
-import {isIfStatement} from 'typescript';
-import console from 'electron-timber';
-import trimStart from 'lodash/trimStart';
 import {
   NEW_ADDRESS,
   NEW_ZOOM_LEVEL,
@@ -17,7 +14,6 @@ import {
   NEW_HOMEPAGE,
   NEW_USER_PREFERENCES,
   DELETE_CUSTOM_DEVICE,
-  TOGGLE_BOOKMARK,
   NEW_DEV_TOOLS_CONFIG,
   NEW_INSPECTOR_STATUS,
   NEW_WINDOW_SIZE,
@@ -26,10 +22,21 @@ import {
   NEW_PAGE_META_FIELD,
   TOGGLE_ALL_DEVICES_MUTED,
   TOGGLE_DEVICE_MUTED,
+  NEW_THEME,
+  NEW_CSS_EDITOR_STATUS,
+  NEW_CSS_EDITOR_POSITION,
+  NEW_CSS_EDITOR_CONTENT,
+  TOGGLE_ALL_DEVICES_DESIGN_MODE,
+  TOGGLE_DEVICE_DESIGN_MODE,
+  SET_HEADER_VISIBILITY,
+  SET_LEFT_PANE_VISIBILITY,
+  SET_HOVERED_LINK,
 } from '../actions/browser';
 import {
   CHANGE_ACTIVE_THROTTLING_PROFILE,
   SAVE_THROTTLING_PROFILES,
+  CHANGE_PROXY_PROFILE,
+  TOGGLE_USE_PROXY,
 } from '../actions/networkConfig';
 import type {Action} from './types';
 import getAllDevices from '../constants/devices';
@@ -38,6 +45,7 @@ import {
   FLEXIGRID_LAYOUT,
   INDIVIDUAL_LAYOUT,
   DEVTOOLS_MODES,
+  CSS_EDITOR_MODES,
 } from '../constants/previewerLayouts';
 import {DEVICE_MANAGER} from '../constants/DrawerContents';
 import {
@@ -45,14 +53,16 @@ import {
   USER_PREFERENCES,
   CUSTOM_DEVICES,
   NETWORK_CONFIGURATION,
+  LAYOUT,
 } from '../constants/settingKeys';
 import {
   getHomepage,
-  getLastOpenedAddress,
   saveHomepage,
   saveLastOpenedAddress,
 } from '../utils/navigatorUtils';
 import {updateExistingUrl} from '../services/searchUrlSuggestions';
+import {normalizeZoomLevel} from '../utils/browserUtils';
+import {DEFAULT_ZOOM_LEVEL} from '../constants';
 
 export const FILTER_FIELDS = {
   OS: 'OS',
@@ -115,10 +125,14 @@ type PageMetaType = {
 type UserPreferenceType = {
   disableSSLValidation: boolean,
   reopenLastAddress: boolean,
+  disableSpellCheck: boolean,
   drawerState: boolean,
   devToolsOpenMode: DevToolsOpenModeType,
   deviceOutlineStyle: string,
   zoomLevel: number,
+  removeFixedPositionedElements: boolean,
+  screenshotMechanism: string,
+  permissionManagement: 'Ask always' | 'Allow always' | 'Deny always',
 };
 
 type FilterFieldType = FILTER_FIELDS.OS | FILTER_FIELDS.DEVICE_TYPE;
@@ -134,9 +148,33 @@ type NetworkThrottlingProfileType = {
   active: boolean,
 };
 
+type ProxyRuleType = {
+  protocol: 'direct' | 'http' | 'https' | 'socks4' | 'socks5',
+  server: string,
+  port: number,
+  user: string,
+  password: string,
+  useDefault: boolean,
+};
+
+type NetworkProxyProfileType = {
+  active: boolean,
+  default: ProxyRuleType,
+  http: ProxyRuleType,
+  https: ProxyRuleType,
+  ftp: ProxyRuleType,
+  bypassList: string[],
+};
+
 type NetworkConfigurationType = {
   throttling: NetworkThrottlingProfileType[],
-  // proxy: NetworkProxyProfileType[],
+  proxy: NetworkProxyProfileType,
+};
+
+type CSSEditorStateType = {
+  isOpen: boolean,
+  position: String,
+  content: String,
 };
 
 export type BrowserStateType = {
@@ -153,10 +191,14 @@ export type BrowserStateType = {
   userPreferences: UserPreferenceType,
   bookmarks: BookmarksType,
   devToolsConfig: DevToolsConfigType,
+  cssEditor: CSSEditorStateType,
   isInspecting: boolean,
   windowSize: WindowSizeType,
   allDevicesMuted: boolean,
   networkConfiguration: NetworkConfigurationType,
+  allDevicesInDesignMode: boolean,
+  isHeaderVisible: boolean,
+  isLeftPaneVisible: boolean,
 };
 
 let _activeDevices = null;
@@ -189,6 +231,7 @@ function _getActiveDevices() {
     activeDevices.forEach(device => {
       device.loading = false;
       device.isMuted = false;
+      device.designMode = false;
     });
   }
   return activeDevices;
@@ -251,49 +294,14 @@ function _updateFileWatcher(newURL) {
   else ipcRenderer.send('stop-watcher');
 }
 
-function getDefaultNetworkThrottlingProfiles(): NetworkThrottlingProfileType[] {
-  return [
-    {
-      type: 'Online',
-      title: 'Online',
-      active: true,
-    },
-    {
-      type: 'Offline',
-      title: 'Offline',
-      downloadKps: 0,
-      uploadKps: 0,
-      latencyMs: 0,
-    },
-    // https://github.com/ChromeDevTools/devtools-frontend/blob/4f404fa8beab837367e49f68e29da427361b1f81/front_end/sdk/NetworkManager.js#L251-L265
-    {
-      type: 'Preset',
-      title: 'Slow 3G',
-      downloadKps: 400,
-      uploadKps: 400,
-      latencyMs: 2000,
-    },
-    {
-      type: 'Preset',
-      title: 'Fast 3G',
-      downloadKps: 1475,
-      uploadKps: 675,
-      latencyMs: 563,
-    },
-  ];
+function _getHomepage() {
+  const homepage = getHomepage();
+  _updateFileWatcher(homepage);
+  return homepage;
 }
 
 function _getNetworkConfiguration(): NetworkConfigurationType {
-  const ntwrk: NetworkConfigurationType =
-    settings.get(NETWORK_CONFIGURATION) || {};
-
-  if (ntwrk.throttling == null)
-    ntwrk.throttling = getDefaultNetworkThrottlingProfiles();
-
-  // if (ntwrk.proxy == null)
-  //   ntwrk.proxy = getDefaultNetworkProxyProfiles();
-
-  return ntwrk;
+  return settings.get(NETWORK_CONFIGURATION) || {};
 }
 
 function _setNetworkConfiguration(
@@ -302,15 +310,22 @@ function _setNetworkConfiguration(
   settings.set(NETWORK_CONFIGURATION, networkConfiguration);
 }
 
+function getLayout() {
+  return settings.get(LAYOUT) || FLEXIGRID_LAYOUT;
+}
+
+function setLayout(layout) {
+  settings.set(LAYOUT, layout);
+}
+
 export default function browser(
   state: BrowserStateType = {
     devices: _getActiveDevices(),
-    homepage: getHomepage(),
-    address: _getUserPreferences().reopenLastAddress
-      ? getLastOpenedAddress()
-      : getHomepage(),
+    homepage: _getHomepage(),
     currentPageMeta: {},
-    zoomLevel: _getUserPreferences().zoomLevel || 0.6,
+    zoomLevel:
+      normalizeZoomLevel(_getUserPreferences().zoomLevel) || DEFAULT_ZOOM_LEVEL,
+    theme: _getUserPreferences().theme,
     previousZoomLevel: null,
     scrollPosition: {x: 0, y: 0},
     navigatorStatus: {backEnabled: false, forwardEnabled: false},
@@ -321,7 +336,7 @@ export default function browser(
           : _getUserPreferences().drawerState,
       content: DEVICE_MANAGER,
     },
-    previewer: {layout: FLEXIGRID_LAYOUT},
+    previewer: {layout: getLayout()},
     filters: {[FILTER_FIELDS.OS]: [], [FILTER_FIELDS.DEVICE_TYPE]: []},
     userPreferences: _getUserPreferences(),
     allDevices: getAllDevices(),
@@ -340,9 +355,14 @@ export default function browser(
       ),
     },
     isInspecting: false,
+    CSSEditor: {isOpen: false, position: CSS_EDITOR_MODES.LEFT, content: ''},
     windowSize: getWindowSize(),
     allDevicesMuted: false,
     networkConfiguration: _getNetworkConfiguration(),
+    allDevicesInDesignMode: false,
+    isHeaderVisible: true,
+    isLeftPaneVisible: true,
+    hoveredLink: '',
   },
   action: Action
 ) {
@@ -353,6 +373,10 @@ export default function browser(
       updateExistingUrl(action.address);
       return {...state, address: action.address, currentPageMeta: {}};
     case NEW_PAGE_META_FIELD:
+      updateExistingUrl(state.address, {
+        name: action.name,
+        value: action.value,
+      });
       return {
         ...state,
         currentPageMeta: {
@@ -370,6 +394,12 @@ export default function browser(
         zoomLevel: action.zoomLevel,
       });
       return {...state, zoomLevel: action.zoomLevel};
+    case NEW_THEME:
+      _setUserPreferences({
+        ...state.userPreferences,
+        theme: action.theme,
+      });
+      return {...state, theme: action.theme};
     case NEW_SCROLL_POSITION:
       return {...state, scrollPosition: action.scrollPosition};
     case NEW_NAVIGATOR_STATUS:
@@ -383,6 +413,7 @@ export default function browser(
     case NEW_PREVIEWER_CONFIG:
       const updateObject = {previewer: action.previewer};
       updateObject.previewer.previousLayout = state.previewer.layout;
+      setLayout(action.previewer.layout);
 
       if (
         state.previewer.layout !== INDIVIDUAL_LAYOUT &&
@@ -431,6 +462,18 @@ export default function browser(
         newState.userPreferences = newUserPreferences;
       }
       return newState;
+    case NEW_CSS_EDITOR_STATUS:
+      return {...state, CSSEditor: {...state.CSSEditor, isOpen: action.status}};
+    case NEW_CSS_EDITOR_POSITION:
+      return {
+        ...state,
+        CSSEditor: {...state.CSSEditor, position: action.position},
+      };
+    case NEW_CSS_EDITOR_CONTENT:
+      return {
+        ...state,
+        CSSEditor: {...state.CSSEditor, content: action.content},
+      };
     case NEW_INSPECTOR_STATUS:
       return {...state, isInspecting: action.status};
     case NEW_WINDOW_SIZE:
@@ -451,9 +494,14 @@ export default function browser(
         devices: updatedDevices,
       };
     case TOGGLE_DEVICE_MUTED:
-      const updatedDevice = state.devices.find(x => x.id === action.deviceId);
-      if (updatedDevice == null) return {...state};
-      updatedDevice.isMuted = action.isMuted;
+      const updatedDeviceIndex = state.devices.findIndex(
+        x => x.id === action.deviceId
+      );
+      if (updatedDeviceIndex === -1) return {...state};
+      state.devices[updatedDeviceIndex] = {
+        ...state.devices[updatedDeviceIndex],
+        isMuted: action.isMuted,
+      };
       return {
         ...state,
         allDevicesMuted: state.devices.every(x => x.isMuted),
@@ -486,6 +534,72 @@ export default function browser(
           ...state.networkConfiguration,
           throttling: action.profiles,
         },
+      };
+    case TOGGLE_USE_PROXY:
+      const proxy = state.networkConfiguration.proxy;
+      proxy.active = !!action.useProxy;
+      _setNetworkConfiguration({
+        ...state.networkConfiguration,
+        proxy,
+      });
+      return {
+        ...state,
+        networkConfiguration: {
+          ...state.networkConfiguration,
+          proxy: {...proxy},
+        },
+      };
+    case CHANGE_PROXY_PROFILE:
+      _setNetworkConfiguration({
+        ...state.networkConfiguration,
+        proxy: action.profile,
+      });
+      return {
+        ...state,
+        networkConfiguration: {
+          ...state.networkConfiguration,
+          proxy: action.profile,
+        },
+      };
+    case TOGGLE_ALL_DEVICES_DESIGN_MODE:
+      const nextDevices = state.devices;
+      const nextDesginModeForAll = !state.allDevicesInDesignMode;
+      nextDevices.forEach(d => (d.designMode = nextDesginModeForAll));
+      return {
+        ...state,
+        allDevicesInDesignMode: nextDesginModeForAll,
+        devices: nextDevices,
+      };
+    case TOGGLE_DEVICE_DESIGN_MODE:
+      const deviceIndex = state.devices.findIndex(
+        x => x.id === action.deviceId
+      );
+      if (deviceIndex === -1) return {...state};
+      const nextDesignModeForDevice = !state.devices[deviceIndex].designMode;
+      state.devices[deviceIndex] = {
+        ...state.devices[deviceIndex],
+        designMode: nextDesignModeForDevice,
+      };
+      return {
+        ...state,
+        allDevicesInDesignMode: state.devices.every(x => x.designMode),
+        devices: [...state.devices],
+      };
+    case SET_HEADER_VISIBILITY:
+      return {
+        ...state,
+        isHeaderVisible: action.isVisible,
+      };
+
+    case SET_LEFT_PANE_VISIBILITY:
+      return {
+        ...state,
+        isLeftPaneVisible: action.isVisible,
+      };
+    case SET_HOVERED_LINK:
+      return {
+        ...state,
+        hoveredLink: action.url,
       };
     default:
       return state;

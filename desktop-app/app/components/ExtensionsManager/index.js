@@ -12,23 +12,35 @@ import InputAdornment from '@material-ui/core/InputAdornment';
 import {remote, ipcRenderer} from 'electron';
 import cx from 'classnames';
 import {
-  makeStyles,
   Popper,
   Fade,
   Paper,
   Typography,
   ClickAwayListener,
 } from '@material-ui/core';
+import {useTheme, makeStyles} from '@material-ui/core/styles';
 import styles from './styles.css';
-import commonStyles from '../common.styles.css';
-import {lightIconsColor} from '../../constants/colors';
+import useCommonStyles from '../useCommonStyles';
 import helpScreenshot from './help-screenshot.png';
 
-const useStyles = makeStyles({
+const useStyles = makeStyles(theme => ({
   adornedEnd: {
     paddingRight: 0,
   },
-});
+  extensionsHelp: {
+    display: 'flex',
+    flexDirection: 'column',
+    width: 500,
+    padding: 12,
+    color: 'white',
+    borderRadius: 4,
+    background: theme.palette.mode({
+      light: theme.palette.secondary.main,
+      dark: '#313131',
+    }),
+    boxShadow: '3px 3px 6px 1px black',
+  },
+}));
 
 export default function ExtensionsManager({triggerNavigationReload}) {
   const {BrowserWindow} = remote;
@@ -44,6 +56,8 @@ export default function ExtensionsManager({triggerNavigationReload}) {
   const [errorMessage, setErrorMessage] = useState('');
   const [extensionId, setExtensionId] = useState('');
   const [extensions, setExtensions] = useState(getInstalledExtensions());
+  const commonClasses = useCommonStyles();
+  const theme = useTheme();
 
   useEffect(() => {
     setErrorMessage('');
@@ -112,75 +126,73 @@ export default function ExtensionsManager({triggerNavigationReload}) {
 
   return (
     <>
-      <Popper open={helpOpen} anchorEl={anchorEl} placement="bottom" transition>
+      <Popper
+        open={helpOpen}
+        anchorEl={anchorEl}
+        placement="bottom-start"
+        transition
+      >
         {({TransitionProps}) => (
           <ClickAwayListener onClickAway={toggleHelp}>
             <Fade {...TransitionProps} timeout={350}>
-              <Paper>
-                <div className={styles.extensionsHelp}>
-                  <p className={cx(styles.extensionsHelpText)}>
-                    Find the extension on Chrome Web Store and copy the
-                    extension ID from the address bar(as shown below).
-                  </p>
-                  <img
-                    className={styles.extensionsHelpImg}
-                    src={helpScreenshot}
-                  />
-                </div>
-              </Paper>
+              <div className={classes.extensionsHelp}>
+                <p className={cx(styles.extensionsHelpText)}>
+                  Find the extension on Chrome Web Store and copy the extension
+                  ID from the address bar(as shown below).
+                </p>
+                <img
+                  className={styles.extensionsHelpImg}
+                  src={helpScreenshot}
+                />
+              </div>
             </Fade>
           </ClickAwayListener>
         )}
       </Popper>
-      <div className={cx(commonStyles.sidebarContentSection)}>
-        <div className={cx(commonStyles.sidebarContentSectionTitleBar)}>
+      <div className={commonClasses.sidebarContentSection}>
+        <div className={commonClasses.sidebarContentSectionTitleBar}>
           <ExtensionsIcon className={styles.extensionManagerIcon} /> Manage
           Extensions
         </div>
-        <div className={cx(commonStyles.sidebarContentSectionContainer)}>
+        <div className={commonClasses.sidebarContentSectionContainer}>
           <form className={styles.extensionAdd} onSubmit={handleSubmit}>
-            <div>
-              <TextField
-                type="text"
-                color="secondary"
-                value={extensionId}
-                onChange={handleChange}
-                disabled={loading}
-                placeholder="Extension ID"
-                variant="outlined"
-                error={errorMessage !== ''}
-                InputProps={{
-                  classes: {
-                    adornedEnd: classes.adornedEnd,
-                  },
-                  endAdornment: (
-                    <InputAdornment position="start">
-                      <IconButton
-                        onClick={toggleHelp}
-                        size="small"
-                        title="Help"
-                      >
-                        <HelpOutlineIcon
-                          fontSize="small"
-                          htmlColor={lightIconsColor}
-                        />
-                      </IconButton>
+            <TextField
+              type="text"
+              color="secondary"
+              value={extensionId}
+              onChange={handleChange}
+              disabled={loading}
+              placeholder="Extension ID"
+              variant="outlined"
+              error={errorMessage !== ''}
+              size="small"
+              InputProps={{
+                classes: {
+                  adornedEnd: classes.adornedEnd,
+                },
+                endAdornment: (
+                  <InputAdornment position="start">
+                    <IconButton onClick={toggleHelp} size="small" title="Help">
+                      <HelpOutlineIcon
+                        fontSize="small"
+                        htmlColor={theme.palette.lightIcon.main}
+                      />
+                    </IconButton>
 
-                      <IconButton
-                        onClick={getLocalExtensionPath}
-                        size="small"
-                        title="Install local devtools extension"
-                      >
-                        <FolderOpenIcon
-                          fontSize="small"
-                          htmlColor={lightIconsColor}
-                        />
-                      </IconButton>
-                    </InputAdornment>
-                  ),
-                }}
-              />
-            </div>
+                    <IconButton
+                      onClick={getLocalExtensionPath}
+                      size="small"
+                      title="Install local devtools extension"
+                    >
+                      <FolderOpenIcon
+                        fontSize="small"
+                        htmlColor={theme.palette.lightIcon.main}
+                      />
+                    </IconButton>
+                  </InputAdornment>
+                ),
+              }}
+            />
             <Button onClick={handleSubmit} disabled={extensionId.trim() === ''}>
               {loading ? <CircularProgress size={22} /> : 'Add'}
             </Button>
@@ -213,6 +225,8 @@ export default function ExtensionsManager({triggerNavigationReload}) {
 }
 
 function ExtensionItem({extension, onDelete}) {
+  const theme = useTheme();
+
   const handleDelete = () => {
     onDelete(extension.name);
   };
@@ -224,7 +238,7 @@ function ExtensionItem({extension, onDelete}) {
         <span className={styles.extensionVersion}>{extension.version}</span>
       </div>
       <IconButton onClick={handleDelete} size="small" title="Delete extension">
-        <DeleteIcon fontSize="small" htmlColor={lightIconsColor} />
+        <DeleteIcon fontSize="small" htmlColor={theme.palette.lightIcon.main} />
       </IconButton>
     </div>
   );

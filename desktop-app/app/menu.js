@@ -8,9 +8,9 @@ import {
   clipboard,
   screen,
 } from 'electron';
-import * as os from 'os';
 import fs from 'fs';
-import {pkg} from './utils/generalUtils';
+import url from 'url';
+import {getEnvironmentInfo, getPackageJson} from './utils/generalUtils';
 import {
   getAllShortcuts,
   registerShortcut,
@@ -29,6 +29,48 @@ export default class MenuBuilder {
     this.mainWindow = mainWindow;
   }
 
+  aboutClick() {
+    const iconPath = path.join(__dirname, '../resources/icons/64x64.png');
+    const title = 'Responsively';
+    const {description} = getPackageJson();
+    const {
+      appVersion,
+      electronVersion,
+      chromeVersion,
+      nodeVersion,
+      v8Version,
+      osInfo,
+    } = getEnvironmentInfo();
+
+    const usefulInfo = `Version: ${appVersion}\nElectron: ${electronVersion}\nChrome: ${chromeVersion}\nNode.js: ${nodeVersion}\nV8: ${v8Version}\nOS: ${osInfo}`;
+    const detail = description ? `${description}\n\n${usefulInfo}` : usefulInfo;
+    let buttons = ['OK', 'Copy'];
+    let cancelId = 0;
+    let defaultId = 1;
+    if (process.platform === 'linux') {
+      buttons = ['Copy', 'OK'];
+      cancelId = 1;
+      defaultId = 0;
+    }
+    dialog
+      .showMessageBox(BrowserWindow.getAllWindows()[0], {
+        type: 'none',
+        buttons,
+        title,
+        message: title,
+        detail,
+        noLink: true,
+        icon: iconPath,
+        cancelId,
+        defaultId,
+      })
+      .then(({response}) => {
+        if (response === defaultId) {
+          clipboard.writeText(usefulInfo, 'clipboard');
+        }
+      });
+  }
+
   subMenuHelp = {
     label: 'Help',
     submenu: [
@@ -41,14 +83,16 @@ export default class MenuBuilder {
       {
         label: 'Open Source',
         click() {
-          shell.openExternal('https://github.com/manojVivek/responsively-app');
+          shell.openExternal(
+            'https://github.com/responsively-org/responsively-app'
+          );
         },
       },
       {
         label: 'Report Issues',
         click() {
           shell.openExternal(
-            'https://github.com/manojVivek/responsively-app/issues'
+            'https://github.com/responsively-org/responsively-app/issues'
           );
         },
       },
@@ -89,7 +133,12 @@ export default class MenuBuilder {
 
           win.center();
 
-          win.loadURL(`file://${__dirname}/shortcuts.html`);
+          win.loadURL(
+            url.format({
+              protocol: 'file',
+              pathname: path.join(__dirname, 'shortcuts.html'),
+            })
+          );
 
           win.once('ready-to-show', () => {
             win.show();
@@ -115,12 +164,12 @@ export default class MenuBuilder {
             if (
               r == null ||
               r.updateInfo == null ||
-              r.updateInfo.version === pkg.version
+              r.updateInfo.version === getPackageJson().version
             ) {
               dialog.showMessageBox(BrowserWindow.getAllWindows()[0], {
                 type: 'info',
                 title: 'Responsively',
-                message: 'There are currently no updates available',
+                message: 'The app is up to date! 🎉',
               });
             }
           });
@@ -132,47 +181,8 @@ export default class MenuBuilder {
       {
         label: 'About',
         accelerator: 'F1',
-        click() {
-          const iconPath = path.join(__dirname, '../resources/icons/64x64.png');
-          const title = 'Responsively';
-          const {description} = pkg;
-          const version = pkg.version || 'Unknown';
-          const electron = process.versions.electron || 'Unknown';
-          const chrome = process.versions.chrome || 'Unknown';
-          const node = process.versions.node || 'Unknown';
-          const v8 = process.versions.v8 || 'Unknown';
-          const osText =
-            `${os.type()} ${os.arch()} ${os.release()}`.trim() || 'Unknown';
-          const usefulInfo = `Version: ${version}\nElectron: ${electron}\nChrome: ${chrome}\nNode.js: ${node}\nV8: ${v8}\nOS: ${osText}`;
-          const detail = description
-            ? `${description}\n\n${usefulInfo}`
-            : usefulInfo;
-          let buttons = ['OK', 'Copy'];
-          let cancelId = 0;
-          let defaultId = 1;
-          if (process.platform === 'linux') {
-            buttons = ['Copy', 'OK'];
-            cancelId = 1;
-            defaultId = 0;
-          }
-          dialog
-            .showMessageBox(BrowserWindow.getAllWindows()[0], {
-              type: 'none',
-              buttons,
-              title,
-              message: title,
-              detail,
-              noLink: true,
-              icon: iconPath,
-              cancelId,
-              defaultId,
-            })
-            .then(({response}) => {
-              if (response === defaultId) {
-                clipboard.writeText(usefulInfo, 'clipboard');
-              }
-            });
-        },
+        click: this.aboutClick,
+        shortcutIndex: 5,
       },
     ],
   };
@@ -183,17 +193,21 @@ export default class MenuBuilder {
       {
         label: 'Open HTML file',
         accelerator: 'CommandOrControl+O',
+        shortcutIndex: 0,
         click: () => {
           const selected = dialog.showOpenDialogSync({
             filters: [{name: 'HTML', extensions: ['htm', 'html']}],
           });
+
           if (!selected || !selected.length || !selected[0]) {
             return;
           }
           let filePath = selected[0];
-          if (!filePath.startsWith('file://')) {
-            filePath = `file://${filePath}`;
-          }
+
+          filePath = url.format({
+            protocol: 'file',
+            pathname: filePath,
+          });
           this.mainWindow.webContents.send('address-change', filePath);
         },
       },
@@ -243,6 +257,10 @@ export default class MenuBuilder {
         break;
       case AppUpdaterStatus.Downloading:
         label = 'Downloading Update...';
+        enabled = false;
+        break;
+      case AppUpdaterStatus.NewVersion:
+        label = 'New version available';
         enabled = false;
         break;
       case AppUpdaterStatus.Downloaded:
@@ -307,10 +325,11 @@ export default class MenuBuilder {
     const subMenuAbout = {
       label: 'Responsively',
       submenu: [
-        // {
-        //   label: 'About ResponsivelyApp',
-        //   selector: 'orderFrontStandardAboutPanel:',
-        // },
+        {
+          label: 'About ResponsivelyApp',
+          selector: 'orderFrontStandardAboutPanel:',
+          click: this.aboutClick,
+        },
         {type: 'separator'},
         // {label: 'Services', submenu: []},
         {type: 'separator'},
@@ -361,6 +380,7 @@ export default class MenuBuilder {
         {
           label: 'Reload',
           accelerator: 'CommandOrControl+R',
+          skipRegistration: true,
           click: () => {
             this.mainWindow.webContents.reload();
           },
@@ -368,6 +388,7 @@ export default class MenuBuilder {
         {
           label: 'Reload Ignoring Cache',
           accelerator: 'CommandOrControl+Shift+R',
+          shortcutIndex: 3,
           click: () => {
             this.mainWindow.webContents.send('reload-url', {ignoreCache: true});
           },
@@ -375,6 +396,7 @@ export default class MenuBuilder {
         {
           label: '&ReloadCSS',
           accelerator: 'Alt+R',
+          shortcutIndex: 2,
           click: () => {
             this.mainWindow.webContents.send('reload-css');
           },
@@ -382,6 +404,7 @@ export default class MenuBuilder {
         {
           label: 'Toggle Full Screen',
           accelerator: 'Ctrl+Command+F',
+          shortcutIndex: 4,
           click: () => {
             this.mainWindow.setFullScreen(!this.mainWindow.isFullScreen());
           },
@@ -409,6 +432,7 @@ export default class MenuBuilder {
         {
           label: 'Reload',
           accelerator: 'CommandOrControl+R',
+          skipRegistration: true,
           click: () => {
             this.mainWindow.webContents.send('reload-url');
           },
@@ -416,6 +440,7 @@ export default class MenuBuilder {
         {
           label: 'Reload Ignoring Cache',
           accelerator: 'CommandOrControl+Shift+R',
+          shortcutIndex: 3,
           click: () => {
             this.mainWindow.webContents.send('reload-url', {ignoreCache: true});
           },
@@ -423,6 +448,7 @@ export default class MenuBuilder {
         {
           label: '&ReloadCSS',
           accelerator: 'Alt+R',
+          shortcutIndex: 2,
           click: () => {
             this.mainWindow.webContents.send('reload-css');
           },
@@ -430,6 +456,7 @@ export default class MenuBuilder {
         {
           label: 'Toggle Full Screen',
           accelerator: 'Ctrl+Command+F',
+          shortcutIndex: 4,
           click: () => {
             this.mainWindow.setFullScreen(!this.mainWindow.isFullScreen());
           },
@@ -485,7 +512,8 @@ export default class MenuBuilder {
             ? [
                 {
                   label: '&Reload',
-                  accelerator: 'Ctrl+R',
+                  accelerator: 'CommandOrControl+R',
+                  skipRegistration: true,
                   click: () => {
                     this.mainWindow.webContents.reload();
                   },
@@ -493,6 +521,7 @@ export default class MenuBuilder {
                 {
                   label: 'Reload Ignoring Cache',
                   accelerator: 'CommandOrControl+Shift+R',
+                  shortcutIndex: 3,
                   click: () => {
                     this.mainWindow.webContents.send('reload-url', {
                       ignoreCache: true,
@@ -502,6 +531,7 @@ export default class MenuBuilder {
                 {
                   label: 'Toggle &Full Screen',
                   accelerator: 'F11',
+                  shortcutIndex: 4,
                   click: () => {
                     this.mainWindow.setFullScreen(
                       !this.mainWindow.isFullScreen()
@@ -530,6 +560,7 @@ export default class MenuBuilder {
                 {
                   label: '&Reload',
                   accelerator: 'CommandOrControl+R',
+                  skipRegistration: true,
                   click: () => {
                     this.mainWindow.webContents.send('reload-url');
                   },
@@ -537,6 +568,7 @@ export default class MenuBuilder {
                 {
                   label: '&ReloadCSS',
                   accelerator: 'Alt+R',
+                  shortcutIndex: 2,
                   click: () => {
                     this.mainWindow.webContents.send('reload-css');
                   },
@@ -544,6 +576,7 @@ export default class MenuBuilder {
                 {
                   label: 'Reload Ignoring Cache',
                   accelerator: 'CommandOrControl+Shift+R',
+                  shortcutIndex: 3,
                   click: () => {
                     this.mainWindow.webContents.send('reload-url', {
                       ignoreCache: true,
@@ -553,6 +586,7 @@ export default class MenuBuilder {
                 {
                   label: 'Toggle &Full Screen',
                   accelerator: 'F11',
+                  shortcutIndex: 4,
                   click: () => {
                     this.mainWindow.setFullScreen(
                       !this.mainWindow.isFullScreen()
@@ -585,7 +619,7 @@ export default class MenuBuilder {
 
     for (let i = 0; i < template.length; i++) {
       const item = template[i];
-      if (item == null) continue;
+      if (item == null || item.skipRegistration) continue;
 
       const label = (item.label || `submenu${i}`).split('&').join('');
       const levelId = `${id}_${label}`;
@@ -595,6 +629,7 @@ export default class MenuBuilder {
           id: levelId,
           title: label,
           accelerators: [item.accelerator],
+          index: item.shortcutIndex,
         });
 
       if (item.submenu == null) continue;

@@ -1,18 +1,19 @@
-// @flow
-import React, {useRef} from 'react';
-import {Icon} from 'flwww';
+import React from 'react';
 import Grid from '@material-ui/core/Grid';
 import DevicesIcon from '@material-ui/icons/Devices';
 import SettingsIcon from '@material-ui/icons/Settings';
 import PhotoLibraryIcon from '@material-ui/icons/PhotoLibraryOutlined';
 import ExtensionIcon from '@material-ui/icons/Extension';
-import NetworkIcon from '../icons/Network';
 import cx from 'classnames';
+import NetworkIcon from '../icons/Network';
 import Logo from '../icons/Logo';
+import Gift from '../icons/Gift';
+import Headway from '../Headway';
+import ZenButton from '../ZenButton';
+import Tooltip from '@material-ui/core/Tooltip';
 
 import styles from './styles.css';
-import commonStyles from '../common.styles.css';
-import {iconsColor} from '../../constants/colors';
+import useCommonStyles from '../useCommonStyles';
 import {
   DEVICE_MANAGER,
   SCREENSHOT_MANAGER,
@@ -20,9 +21,53 @@ import {
   EXTENSIONS_MANAGER,
   NETWORK_CONFIGURATION,
 } from '../../constants/DrawerContents';
+import {makeStyles} from '@material-ui/core/styles';
+
+const useStyles = makeStyles(theme => ({
+  container: {
+    position: 'relative',
+    backgroundColor: theme.palette.background.l2,
+    display: 'flex',
+    flexFlow: 'column',
+    marginTop: '-50px',
+    paddingTop: '50px',
+    width: 50,
+    boxShadow: `0 ${theme.palette.mode({
+      light: '3px',
+      dark: '3px',
+    })} 5px rgba(0, 0, 0, 0.35)`,
+    zIndex: 1,
+    transform: 'translateX(0)',
+    transition: 'transform .1s ease-out',
+    '& .zenButton': {
+      position: 'absolute',
+      background: theme.palette.background.l2,
+      top: '50%',
+      right: '0',
+      transformOrigin: 'center',
+      transform: 'translate(100%, -50%) rotate(-90deg) translateY(-30px)',
+      display: 'none',
+    },
+    '&:hover .zenButton': {
+      display: 'flex',
+    },
+    '&.zenMode': {
+      transform: 'translateX(-100%)',
+    },
+    '&.zenMode .zenButton': {
+      display: 'flex',
+    },
+  },
+  leftPaneIcon: {
+    '& svg': {
+      verticalAlign: 'middle',
+    },
+  },
+}));
 
 const LeftIconsPane = props => {
-  const headwayRef = useRef();
+  const commonClasses = useCommonStyles();
+  const mStyles = useStyles();
   const iconProps = {
     style: {fontSize: 30},
     height: 30,
@@ -36,10 +81,11 @@ const LeftIconsPane = props => {
     props.openDrawerAndSetContent(content);
   };
   return (
-    <div className={styles.iconsContainer}>
-      <div className={cx(styles.logo, styles.icon)}>
-        <Logo width={40} height={40} />
-      </div>
+    <div
+      className={`${mStyles.container} ${
+        props.isLeftPaneVisible ? '' : 'zenMode'
+      }`}
+    >
       <Grid
         container
         spacing={1}
@@ -49,65 +95,73 @@ const LeftIconsPane = props => {
       >
         <Grid
           item
-          className={cx(commonStyles.icons, styles.icon, commonStyles.enabled, {
-            [commonStyles.selected]:
+          className={cx(commonClasses.icon, styles.icon, {
+            [commonClasses.iconSelected]:
               props.drawer.open && props.drawer.content === DEVICE_MANAGER,
           })}
           onClick={() => toggleState(DEVICE_MANAGER)}
         >
-          <div>
-            <DevicesIcon {...iconProps} className="deviceManagerIcon" />
-          </div>
+          <Tooltip title="Device manager">
+            <div className={cx(mStyles.leftPaneIcon)}>
+              <DevicesIcon {...iconProps} className="deviceManagerIcon" />
+            </div>
+          </Tooltip>
         </Grid>
         <Grid
           item
-          className={cx(commonStyles.icons, styles.icon, commonStyles.enabled, {
-            [commonStyles.selected]:
+          className={cx(commonClasses.icon, styles.icon, {
+            [commonClasses.iconSelected]:
               props.drawer.open && props.drawer.content === USER_PREFERENCES,
           })}
           onClick={() => toggleState(USER_PREFERENCES)}
         >
-          <div>
-            <SettingsIcon {...iconProps} className="settingsIcon" />
-          </div>
+          <Tooltip title="Preferences">
+            <div className={cx(mStyles.leftPaneIcon)}>
+              <SettingsIcon {...iconProps} className="settingsIcon" />
+            </div>
+          </Tooltip>
         </Grid>
         <Grid
           item
-          className={cx(commonStyles.icons, styles.icon, commonStyles.enabled, {
-            [commonStyles.selected]:
+          className={cx(commonClasses.icon, styles.icon, {
+            [commonClasses.iconSelected]:
               props.drawer.open && props.drawer.content === EXTENSIONS_MANAGER,
           })}
           onClick={() => toggleState(EXTENSIONS_MANAGER)}
         >
-          <div>
-            <ExtensionIcon {...iconProps} className="extensionsIcon" />
-          </div>
+          <Tooltip title="Manage extensions">
+            <div className={cx(mStyles.leftPaneIcon)}>
+              <ExtensionIcon {...iconProps} className="extensionsIcon" />
+            </div>
+          </Tooltip>
         </Grid>
         <Grid
           item
-          className={cx(commonStyles.icons, styles.icon, commonStyles.enabled, {
-            [commonStyles.selected]:
+          className={cx(commonClasses.icon, styles.icon, {
+            [commonClasses.iconSelected]:
               props.drawer.open &&
               props.drawer.content === NETWORK_CONFIGURATION,
           })}
           onClick={() => toggleState(NETWORK_CONFIGURATION)}
         >
-          <div>
-            <NetworkIcon {...iconProps} color="white" className="networkIcon" />
-          </div>
+          <Tooltip title="Manage network">
+            <div className={cx(mStyles.leftPaneIcon)}>
+              <NetworkIcon
+                {...iconProps}
+                color="currentColor"
+                className="networkIcon"
+              />
+            </div>
+          </Tooltip>
         </Grid>
       </Grid>
-      <div style={{position: 'relative'}}>
-        <div
-          id="headway"
-          ref={headwayRef}
-          className={cx(
-            styles.updates,
-            commonStyles.icons,
-            commonStyles.enabled
-          )}
+      <Headway />
+      {!props.drawer.open && (
+        <ZenButton
+          active={!props.isLeftPaneVisible}
+          onClick={() => props.setLeftPaneVisibility(!props.isLeftPaneVisible)}
         />
-      </div>
+      )}
     </div>
   );
 };

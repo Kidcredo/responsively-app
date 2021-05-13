@@ -1,18 +1,15 @@
-// @flow
 import React, {Component, createRef} from 'react';
 import {remote, ipcRenderer} from 'electron';
 import cx from 'classnames';
 import {Resizable} from 're-resizable';
 import {Tooltip} from '@material-ui/core';
+import {withStyles, withTheme} from '@material-ui/core/styles';
 import debounce from 'lodash/debounce';
 import pubsub from 'pubsub.js';
-import console from 'electron-timber';
 import BugIcon from '../icons/Bug';
-import MutedIcon from '../icons/Muted';
-import UnmutedIcon from '../icons/Unmuted';
+import FullScreenshotIcon from '../icons/FullScreenshot';
 import ScreenshotIcon from '../icons/Screenshot';
 import DeviceRotateIcon from '../icons/DeviceRotate';
-import {iconsColor} from '../../constants/colors';
 import {
   SCROLL_DOWN,
   SCROLL_UP,
@@ -28,13 +25,19 @@ import {
   STOP_LOADING,
   CLEAR_NETWORK_CACHE,
   SET_NETWORK_TROTTLING_PROFILE,
+  OPEN_CONSOLE_FOR_DEVICE,
+  PROXY_AUTH_ERROR,
+  APPLY_CSS,
+  TOGGLE_DEVICE_DESIGN_MODE_STATE,
+  TOGGLE_EVENT_MIRRORING_ALL_DEVICES,
 } from '../../constants/pubsubEvents';
 import {CAPABILITIES} from '../../constants/devices';
+import {DESIGN_MODE_JS_VALUES} from '../../constants/values';
 
 import styles from './style.module.css';
-import commonStyles from '../common.styles.css';
+import {styles as commonStyles} from '../useCommonStyles';
 import UnplugIcon from '../icons/Unplug';
-import {captureFullPage} from './screenshotUtil';
+import {captureScreenshot} from './screenshotUtil';
 import {
   DEVTOOLS_MODES,
   INDIVIDUAL_LAYOUT,
@@ -43,7 +46,11 @@ import Maximize from '../icons/Maximize';
 import Minimize from '../icons/Minimize';
 import Focus from '../icons/Focus';
 import Unfocus from '../icons/Unfocus';
-import {getBrowserSyncEmbedScriptURL} from '../../service/browserSync';
+import DesignModeIcon from '../icons/DesignMode';
+import {captureOnSentry} from '../../utils/logUtils';
+import {getBrowserSyncEmbedScriptURL} from '../../services/browserSync';
+import Spinner from '../Spinner';
+import {isSslValidationFailed} from '../../utils/generalUtils';
 
 const {BrowserWindow} = remote;
 
@@ -74,8 +81,14 @@ class WebView extends Component {
       },
       temporaryDims: null,
       address: this.props.browser.address,
+      proxyAuthError: false,
+      fullDocumentHeight: null,
+      fullDocumentWidth: null,
+      zoomLevel: null,
     };
     this.subscriptions = [];
+    this.domLoaded = false;
+    this.liveCssKey = null;
     this.dbg = null;
   }
 
@@ -87,6 +100,9 @@ class WebView extends Component {
     );
     this.subscriptions.push(
       pubsub.subscribe('scroll', this.processScrollEvent)
+    );
+    this.subscriptions.push(
+      pubsub.subscribe(APPLY_CSS, this.processApplyCssEvent)
     );
     this.subscriptions.push(pubsub.subscribe('click', this.processClickEvent));
     this.subscriptions.push(
@@ -114,6 +130,12 @@ class WebView extends Component {
       pubsub.subscribe(SCREENSHOT_ALL_DEVICES, this.processScreenshotEvent)
     );
     this.subscriptions.push(
+      pubsub.subscribe(
+        TOGGLE_EVENT_MIRRORING_ALL_DEVICES,
+        this.processToggleEventMirroring
+      )
+    );
+    this.subscriptions.push(
       pubsub.subscribe(ADDRESS_CHANGE, this.processAddressChangeEvent)
     );
     this.subscriptions.push(
@@ -128,6 +150,12 @@ class WebView extends Component {
     this.subscriptions.push(
       pubsub.subscribe(TOGGLE_DEVICE_MUTED_STATE, this.processToggleMuteEvent)
     );
+    this.subscriptions.push(
+      pubsub.subscribe(
+        TOGGLE_DEVICE_DESIGN_MODE_STATE,
+        this.changeDesignModeState
+      )
+    );
 
     this.subscriptions.push(
       pubsub.subscribe(
@@ -135,8 +163,20 @@ class WebView extends Component {
         this.setNetworkThrottlingProfile
       )
     );
+
     this.subscriptions.push(
       pubsub.subscribe(CLEAR_NETWORK_CACHE, this.clearNetworkCache)
+    );
+
+    this.subscriptions.push(
+      pubsub.subscribe(PROXY_AUTH_ERROR, this.onProxyError)
+    );
+
+    this.subscriptions.push(
+      pubsub.subscribe(
+        OPEN_CONSOLE_FOR_DEVICE,
+        this.processOpenConsoleForDeviceEvent
+      )
     );
 
     this.webviewRef.current.addEventListener('dom-ready', () => {
@@ -161,12 +201,25 @@ class WebView extends Component {
       );
 
       this.webviewRef.current.addEventListener('new-window', e => {
+        if (
+          e.url.startsWith('file://') &&
+          !this.webviewRef.current.getURL().startsWith('file://')
+        ) {
+          this.webviewRef.current
+            .executeJavaScript(
+              `{
+                console.error('Not allowed to load local resource');
+              }`
+            )
+            .catch(captureOnSentry);
+          return;
+        }
         ipcRenderer.send('open-new-window', {url: e.url});
       });
     }
 
     this.webviewRef.current.addEventListener('did-start-loading', () => {
-      this.setState({errorCode: null, errorDesc: null});
+      this.setState({errorCode: null, errorDesc: null, proxyAuthError: false});
       this.props.onLoadingStateChange(true);
       this.props.deviceLoadingChange({id: this.props.device.id, loading: true});
     });
@@ -175,6 +228,9 @@ class WebView extends Component {
       this.props.deviceLoadingChange({
         id: this.props.device.id,
         loading: false,
+      });
+      this.changeDesignModeState({
+        designMode: !!this.props.device.designMode,
       });
     });
     this.webviewRef.current.addEventListener(
@@ -228,6 +284,10 @@ class WebView extends Component {
       navigationHandler(event);
     });
 
+    this.webviewRef.current.addEventListener('update-target-url', event => {
+      this.props.setHoveredLink(event.url);
+    });
+
     this.webviewRef.current.addEventListener('devtools-closed', () => {
       if (
         this.props.browser.devToolsConfig.mode === DEVTOOLS_MODES.UNDOCKED &&
@@ -236,6 +296,22 @@ class WebView extends Component {
         this._toggleDevTools();
       }
     });
+  }
+
+  componentDidUpdate(prevProps) {
+    if (prevProps.device.isMuted !== this.props.device.isMuted) {
+      if (this.props.device.isMuted) {
+        this._muteWebView();
+      } else {
+        this._unmuteWebView();
+      }
+    }
+
+    if (prevProps.device.designMode !== this.props.device.designMode) {
+      this.changeDesignModeState({
+        designMode: !!this.props.device.designMode,
+      });
+    }
   }
 
   getWebContentsId() {
@@ -287,7 +363,9 @@ class WebView extends Component {
   };
 
   processReloadCSSEvent = () => {
-    this.webviewRef.current.executeJavaScript(`{
+    this.webviewRef.current
+      .executeJavaScript(
+        `{
         var elements = document.querySelectorAll('link[rel=stylesheet][href]');
         elements.forEach(element=>{
           var href = element.href;
@@ -296,7 +374,9 @@ class WebView extends Component {
             element.href = href + (href.indexOf('?')>=0?'&':'?') + 'invalidateCacheParam=' + (new Date().valueOf());
           }
         })
-    }`);
+    }`
+      )
+      .catch(captureOnSentry);
   };
 
   processAddressChangeEvent = ({address, force}) => {
@@ -352,20 +432,67 @@ class WebView extends Component {
     this.webviewRef.current.send('scrollUpMessage');
   };
 
-  processScreenshotEvent = async ({now}) => {
+  processToggleEventMirroring = async ({status}) => {
+    if (status) {
+      this.setState(
+        () => ({
+          ...this.state,
+          isUnplugged: !status,
+        }),
+        async () => {
+          await this.openBrowserSyncSocket(this.webviewRef.current);
+        }
+      );
+    } else {
+      this.setState(
+        () => ({
+          ...this.state,
+          isUnplugged: !status,
+        }),
+        async () => {
+          await this.closeBrowserSyncSocket(this.webviewRef.current);
+        }
+      );
+    }
+  };
+
+  processScreenshotEvent = async ({
+    now,
+    fullScreen = true,
+    deviceId,
+  }: {
+    now?: Date,
+    fullScreen?: boolean,
+  }) => {
+    if (deviceId && this.props.device.id !== deviceId) {
+      return;
+    }
     this.setState({screenshotInProgress: true});
-    await captureFullPage(
-      this.props.browser.address,
-      this.props.device,
-      this.webviewRef.current,
-      now != null,
-      now
-    );
+    try {
+      await this.closeBrowserSyncSocket(this.webviewRef.current);
+      await captureScreenshot({
+        address: this.props.browser.address,
+        device: this.props.device,
+        webView: this.webviewRef.current,
+        createSeparateDir: now != null,
+        fullScreen,
+        now,
+        removeFixedPositionedElements: this.props.browser.userPreferences
+          .removeFixedPositionedElements,
+        screenshotMechanism: this.props.browser.userPreferences
+          .screenshotMechanism,
+        setFullDocumentDimensions: this._setFullDocumentDimensions,
+      });
+    } catch (err) {
+      console.log('Error during screen capture', err);
+    }
+    await this.openBrowserSyncSocket(this.webviewRef.current);
     this.setState({screenshotInProgress: false});
   };
 
-  processFlipOrientationEvent = () => {
-    if (!this.isMobile) {
+  processFlipOrientationEvent = (message = {}) => {
+    const {deviceId} = message;
+    if (deviceId && this.props.device.id !== deviceId) {
       return;
     }
     this._flipOrientation();
@@ -373,6 +500,16 @@ class WebView extends Component {
 
   processToggleMuteEvent = ({muted}) => {
     this.getWebContents().setAudioMuted(muted);
+  };
+
+  changeDesignModeState = ({designMode}) => {
+    this.webviewRef.current
+      .executeJavaScript(
+        `document.designMode = "${
+          designMode ? DESIGN_MODE_JS_VALUES.ON : DESIGN_MODE_JS_VALUES.OFF
+        }";`
+      )
+      .catch(captureOnSentry);
   };
 
   processOpenDevToolsInspectorEvent = message => {
@@ -392,6 +529,14 @@ class WebView extends Component {
       Math.round(webViewX + deviceX * zoomFactor),
       Math.round(webViewY + deviceY * zoomFactor)
     );
+  };
+
+  processOpenConsoleForDeviceEvent = message => {
+    const {deviceId} = message;
+    if (this.props.device.id !== deviceId) {
+      return;
+    }
+    this._toggleDevTools();
   };
 
   setNetworkThrottlingProfile = ({type, downloadKps, uploadKps, latencyMs}) => {
@@ -437,6 +582,10 @@ class WebView extends Component {
     this.getWebContents().session.clearCache();
   };
 
+  onProxyError = () => {
+    this.setState({proxyAuthError: true});
+  };
+
   messageHandler = ({channel: type, args: [message]}) => {
     if (type !== MESSAGE_TYPES.toggleEventMirroring && this.state.isUnplugged) {
       return;
@@ -468,21 +617,71 @@ class WebView extends Component {
     }
   };
 
-  initBrowserSync = webview => {
-    this.getWebContentForId(webview.getWebContentsId()).executeJavaScript(`
-      var bsScript= document.createElement('script');
-      bsScript.src = '${getBrowserSyncEmbedScriptURL()}';
-      bsScript.async = true;
-      document.body.appendChild(bsScript);
-      true
-    `);
+  initBrowserSync = async webview => {
+    await this.getWebContentForId(webview.getWebContentsId())
+      .executeJavaScript(
+        `
+          var bsScript= document.createElement('script');
+          bsScript.src = '${getBrowserSyncEmbedScriptURL()}';
+          bsScript.async = true;
+          document.body.appendChild(bsScript);
+          true
+        `
+      )
+      .catch(captureOnSentry);
   };
 
-  initEventTriggers = webview => {
-    this.initBrowserSync(webview);
-    this.getWebContentForId(webview.getWebContentsId()).executeJavaScript(`{
-      responsivelyApp.deviceId = '${this.props.device.id}';
-    }`);
+  closeBrowserSyncSocket = async webview => {
+    await this.getWebContentForId(webview.getWebContentsId())
+      .executeJavaScript(
+        `
+        if(window.___browserSync___){
+          window.___browserSync___.socket.close()
+        }
+        true
+      `
+      )
+      .catch(captureOnSentry);
+  };
+
+  openBrowserSyncSocket = async webview => {
+    await this.getWebContentForId(webview.getWebContentsId())
+      .executeJavaScript(
+        `
+        if(window.___browserSync___){
+          window.___browserSync___.socket.open()
+        }
+        true
+      `
+      )
+      .catch(captureOnSentry);
+  };
+
+  processApplyCssEvent = async message => {
+    if (!message.css || !this.domLoaded) {
+      return;
+    }
+    if (this.liveCssKey) {
+      this.webviewRef.current.removeInsertedCSS(this.liveCssKey);
+      this.liveCssKey = null;
+    }
+    this.liveCssKey = await this.webviewRef.current.insertCSS(message.css);
+  };
+
+  initEventTriggers = async webview => {
+    await this.initBrowserSync(webview);
+    this.getWebContentForId(webview.getWebContentsId())
+      .executeJavaScript(
+        `{
+          responsivelyApp.deviceId = '${this.props.device.id}';
+        }`
+      )
+      .catch(captureOnSentry);
+
+    if (this.state.isUnplugged) {
+      await this.closeBrowserSyncSocket(webview);
+    }
+    this.domLoaded = true;
   };
 
   hideScrollbar = () => {
@@ -493,6 +692,14 @@ class WebView extends Component {
         }
         `
     );
+  };
+
+  _setFullDocumentDimensions = (
+    fullDocumentHeight,
+    fullDocumentWidth,
+    zoomLevel = null
+  ) => {
+    this.setState({fullDocumentHeight, fullDocumentWidth, zoomLevel});
   };
 
   _isDevToolsOpen = () =>
@@ -527,12 +734,22 @@ class WebView extends Component {
   };
 
   _unPlug = () => {
+    if (this.state.isUnplugged) {
+      this.openBrowserSyncSocket(this.webviewRef.current);
+    } else {
+      this.closeBrowserSyncSocket(this.webviewRef.current);
+    }
     this.setState({isUnplugged: !this.state.isUnplugged}, () => {
       this.webviewRef.current.send(
         'eventsMirroringState',
         !this.state.isUnplugged
       );
     });
+  };
+
+  _toggleDesignMode = () => {
+    const {id: deviceId} = this.props.device;
+    this.props.onToggleDeviceDesignMode(deviceId);
   };
 
   _focusDevice = () => {
@@ -546,14 +763,12 @@ class WebView extends Component {
     }
   };
 
-  _muteDevice = () => {
+  _muteWebView = () => {
     this.getWebContents().setAudioMuted(true);
-    this.props.onDeviceMutedChange(this.props.device.id, true);
   };
 
-  _unmuteDevice = () => {
+  _unmuteWebView = () => {
     this.getWebContents().setAudioMuted(false);
-    this.props.onDeviceMutedChange(this.props.device.id, false);
   };
 
   get isMobile() {
@@ -614,40 +829,55 @@ class WebView extends Component {
     if (!this.props.browser.isInspecting) {
       return;
     }
-    await this.dbg.sendCommand('DOM.enable');
-    await this.dbg.sendCommand('Overlay.enable');
-    await this.dbg.sendCommand('Overlay.setInspectMode', {
-      mode: 'searchForNode',
-      highlightConfig: {
-        showInfo: true,
-        showStyles: true,
-        contentColor: {r: 111, g: 168, b: 220, a: 0.66},
-        paddingColor: {r: 147, g: 196, b: 125, a: 0.66},
-        borderColor: {r: 255, g: 229, b: 153, a: 0.66},
-        marginColor: {r: 246, g: 178, b: 107, a: 0.66},
-      },
-    });
+    try {
+      await this.dbg.sendCommand('DOM.enable');
+      await this.dbg.sendCommand('Overlay.enable');
+      await this.dbg.sendCommand('Overlay.setInspectMode', {
+        mode: 'searchForNode',
+        highlightConfig: {
+          showInfo: true,
+          showStyles: true,
+          contentColor: {r: 111, g: 168, b: 220, a: 0.66},
+          paddingColor: {r: 147, g: 196, b: 125, a: 0.66},
+          borderColor: {r: 255, g: 229, b: 153, a: 0.66},
+          marginColor: {r: 246, g: 178, b: 107, a: 0.66},
+        },
+      });
+    } catch (err) {
+      console.log('Error enabling overlay', err);
+    }
   };
 
   _onMouseLeave = async () => {
     if (!this.props.browser.isInspecting) {
       return;
     }
-    await this.dbg.sendCommand('Overlay.disable');
-    await this.dbg.sendCommand('DOM.disable');
+    try {
+      await this.dbg.sendCommand('Overlay.disable');
+      await this.dbg.sendCommand('DOM.disable');
+    } catch (err) {
+      console.log('Error disabling overlay', err);
+    }
   };
 
-  _getWebViewTag = deviceStyles => {
+  _getWebViewTag = (deviceStyles, containerWidth, containerHeight) => {
     const {
+      classes,
       device: {id, useragent, capabilities},
     } = this.props;
     const {deviceDimensions, address, isTilted} = this.state;
+    const outlinePx = this.props.browser.userPreferences.deviceOutlineStyle
+      ? 3
+      : 0;
 
     if (capabilities.includes(CAPABILITIES.responsive)) {
       return (
         <Resizable
-          className={cx(styles.resizableView)}
-          size={{width: deviceStyles.width, height: deviceStyles.height}}
+          className={styles.resizableView}
+          size={{
+            width: containerWidth + outlinePx,
+            height: containerHeight + outlinePx,
+          }}
           onResizeStart={() => {
             const updatedTempDims = {
               width: deviceDimensions.width,
@@ -666,26 +896,26 @@ class WebView extends Component {
           handleComponent={{
             right: (
               <div
-                className={cx(styles.iconWrapper, styles.iconWrapperE)}
+                className={cx(classes.iconWrapper, styles.iconWrapperE)}
                 {...this.props}
               >
-                <div className={styles.iconHolder} />
+                <div className={classes.iconHolder} />
               </div>
             ),
             bottom: (
               <div
-                className={cx(styles.iconWrapper, styles.iconWrapperS)}
+                className={cx(classes.iconWrapper, styles.iconWrapperS)}
                 {...this.props}
               >
-                <div className={styles.iconHolder} />
+                <div className={classes.iconHolder} />
               </div>
             ),
             bottomRight: (
               <div
-                className={cx(styles.iconWrapper, styles.iconWrapperSE)}
+                className={cx(classes.iconWrapper, styles.iconWrapperSE)}
                 {...this.props}
               >
-                <div className={styles.iconHolder} />
+                <div className={classes.iconHolder} />
               </div>
             ),
           }}
@@ -694,7 +924,7 @@ class WebView extends Component {
             ref={this.webviewRef}
             preload="./preload.js"
             className={cx(styles.device)}
-            src={address || 'about:blank'}
+            src={address}
             useragent={useragent}
             style={deviceStyles}
           />
@@ -708,9 +938,14 @@ class WebView extends Component {
           ref={this.webviewRef}
           preload="./preload.js"
           className={cx(styles.device)}
-          src={address || 'about:blank'}
+          src={address}
           useragent={useragent}
           style={deviceStyles}
+          webpreferences={
+            this.props.browser.userPreferences.disableSpellCheck
+              ? 'spellcheck=no'
+              : 'spellcheck=yes'
+          }
         />
       </>
     );
@@ -720,99 +955,98 @@ class WebView extends Component {
     const {
       browser: {zoomLevel, previewer},
       device: {capabilities},
+      classes,
+      theme,
     } = this.props;
     const {
       deviceDimensions,
       errorCode,
       errorDesc,
       screenshotInProgress,
+      proxyAuthError,
     } = this.state;
+    const screenshotZoomLevel = screenshotInProgress && this.state.zoomLevel;
+    const outline = `4px solid ${
+      this._isDevToolsOpen()
+        ? `#6075ef`
+        : this.props.browser.userPreferences.deviceOutlineStyle ||
+          'rgba(0, 0, 0, 0)'
+    }`;
     const deviceStyles = {
-      outline: `4px solid ${
-        this._isDevToolsOpen()
-          ? `#6075ef`
-          : this.props.browser.userPreferences.deviceOutlineStyle ||
-            'rgba(0, 0, 0, 0)'
-      }`,
+      outline,
+      width:
+        (this.state.screenshotInProgress && this.state.fullDocumentWidth) ||
+        deviceDimensions.width,
+      height:
+        (this.state.screenshotInProgress && this.state.fullDocumentHeight) ||
+        deviceDimensions.height,
+      transform: `scale(${screenshotZoomLevel || zoomLevel})`,
+    };
+    const overlayStyles = {
+      outline,
       width: deviceDimensions.width,
       height: deviceDimensions.height,
+      transform: `scale(${zoomLevel})`,
     };
+
+    const containerWidth = deviceStyles.width * zoomLevel;
+    const containerHeight = deviceStyles.height * zoomLevel;
+
     const isMuted = this.props.device.isMuted;
     const isResponsive = capabilities.includes(CAPABILITIES.responsive);
     const shouldMaximize = previewer.layout !== INDIVIDUAL_LAYOUT;
     const IconFocus = () => {
-      if (shouldMaximize)
-        return <Focus height={30} padding={6} color={iconsColor} />;
-      return <Unfocus height={30} padding={6} color={iconsColor} />;
+      if (shouldMaximize) return <Focus height={30} padding={6} />;
+      return <Unfocus height={30} padding={6} />;
     };
     return (
       <div
         className={cx(styles.webViewContainer, {
           [styles.withMarginRight]: isResponsive,
         })}
-        style={{
-          width: deviceStyles.width * zoomLevel,
-          height: deviceStyles.height * zoomLevel + 40,
-        }}
       >
         <div className={cx(styles.webViewToolbar)}>
           <div className={cx(styles.webViewToolbarLeft)}>
             <Tooltip title="Open DevTools">
               <div
-                className={cx(
-                  styles.webViewToolbarIcons,
-                  commonStyles.icons,
-                  commonStyles.enabled,
-                  {
-                    [commonStyles.selected]: this._isDevToolsOpen(),
-                  }
-                )}
+                className={cx(styles.webViewToolbarIcons, classes.icon, {
+                  [classes.iconSelected]: this._isDevToolsOpen(),
+                })}
                 onClick={this._toggleDevTools}
               >
-                <BugIcon width={20} color={iconsColor} />
+                <BugIcon width={20} />
               </div>
             </Tooltip>
-            <Tooltip title="Take Screenshot">
+            <Tooltip title="Quick Screenshot">
               <div
-                className={cx(
-                  styles.webViewToolbarIcons,
-                  commonStyles.icons,
-                  commonStyles.enabled
-                )}
-                onClick={() => this.processScreenshotEvent({})}
+                className={cx(styles.webViewToolbarIcons, classes.icon)}
+                onClick={() => this.processScreenshotEvent({fullScreen: false})}
               >
-                <ScreenshotIcon height={18} color={iconsColor} />
+                <ScreenshotIcon height={18} />
               </div>
             </Tooltip>
-            <Tooltip title="Tilt Device">
+            <Tooltip title="Disable event mirroring">
               <div
-                className={cx(styles.webViewToolbarIcons, commonStyles.icons, {
-                  [commonStyles.enabled]: this.isMobile,
-                  [commonStyles.disabled]: !this.isMobile,
-                  [commonStyles.selected]: this.state.isTilted,
+                className={cx(styles.webViewToolbarIcons, classes.icon, {
+                  [classes.iconSelected]: this.state.isUnplugged,
                 })}
-                onClick={this._flipOrientation}
+                onClick={this._unPlug}
               >
-                <DeviceRotateIcon height={17} color={iconsColor} />
+                <UnplugIcon height={30} />
               </div>
             </Tooltip>
             <Tooltip
-              title={isMuted ? 'Unmute' : 'Mute'}
-              disableFocusListener={true}
+              title={`${
+                this.props.device.designMode ? 'Disable' : 'Enable'
+              } Design Mode`}
             >
               <div
-                className={cx(
-                  styles.webViewToolbarIcons,
-                  commonStyles.icons,
-                  commonStyles.enabled
-                )}
-                onClick={isMuted ? this._unmuteDevice : this._muteDevice}
+                className={cx(styles.webViewToolbarIcons, classes.icon, {
+                  [classes.iconSelected]: this.props.device.designMode,
+                })}
+                onClick={this._toggleDesignMode}
               >
-                {isMuted ? (
-                  <MutedIcon height={20} color="white" />
-                ) : (
-                  <UnmutedIcon height={20} color="white" />
-                )}
+                <DesignModeIcon height={20} />
               </div>
             </Tooltip>
           </div>
@@ -822,11 +1056,7 @@ class WebView extends Component {
               disableFocusListener
             >
               <div
-                className={cx(
-                  styles.webViewToolbarIcons,
-                  commonStyles.icons,
-                  commonStyles.enabled
-                )}
+                className={cx(styles.webViewToolbarIcons, classes.icon)}
                 onClick={
                   shouldMaximize ? this._focusDevice : this._unfocusDevice
                 }
@@ -837,10 +1067,10 @@ class WebView extends Component {
           </div>
         </div>
         <div
-          className={cx(styles.deviceContainer)}
+          className={classes.deviceContainer}
           style={{
-            width: deviceStyles.width,
-            transform: `scale(${zoomLevel})`,
+            width: containerWidth,
+            height: containerHeight,
           }}
           onMouseEnter={this._onMouseEnter}
           onMouseLeave={this._onMouseLeave}
@@ -849,8 +1079,10 @@ class WebView extends Component {
             className={cx(styles.deviceOverlay, {
               [styles.overlayEnabled]: screenshotInProgress,
             })}
-            style={deviceStyles}
-          />
+            style={overlayStyles}
+          >
+            <Spinner size={24} />
+          </div>
           <div
             className={cx(styles.deviceOverlay, {
               [styles.overlayEnabled]: errorCode,
@@ -859,12 +1091,73 @@ class WebView extends Component {
           >
             <p>ERROR: {errorCode}</p>
             <p className={cx(styles.errorDesc)}>{errorDesc}</p>
+
+            {proxyAuthError && (
+              <p className={cx(styles.errorDesc)}>Proxy Authentication Error</p>
+            )}
+
+            {isSslValidationFailed(errorCode) && (
+              <p className={cx(classes.errorHelpSuggestion)}>
+                If you wish to proceed, you can disable the SSL validation in
+                the user preferences.
+              </p>
+            )}
           </div>
-          {this._getWebViewTag(deviceStyles)}
+          {this._getWebViewTag(deviceStyles, containerWidth, containerHeight)}
         </div>
       </div>
     );
   }
 }
 
-export default WebView;
+const webViewStyles = theme => ({
+  ...commonStyles(theme),
+  deviceContainer: {
+    position: 'relative',
+    display: 'inline-flex',
+    transformOrigin: 'top left',
+  },
+  iconWrapper: {
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'absolute',
+    backgroundPosition: 'center',
+    padding: 0,
+    backgroundColor: theme.palette.background.l2,
+    '&:hover': {
+      backgroundColor: theme.palette.background.l5,
+    },
+  },
+  iconHolder: {
+    position: 'relative',
+    display: 'block',
+    height: '7px',
+    cursor: 'pointer',
+    '&::before': {
+      content: '""',
+      position: 'absolute',
+      left: 0,
+      width: '15px',
+      height: '2px',
+      backgroundColor: theme.palette.text.dim,
+    },
+    '&::after': {
+      content: '""',
+      position: 'absolute',
+      width: '15px',
+      height: '2px',
+      backgroundColor: theme.palette.text.dim,
+      bottom: 0,
+    },
+  },
+  errorHelpSuggestion: {
+    position: 'absolute',
+    top: '25%',
+    width: '100%',
+    padding: 35,
+    background: theme.palette.primary.main,
+  },
+});
+export default withStyles(webViewStyles)(withTheme(WebView));

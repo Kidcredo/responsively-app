@@ -271,11 +271,155 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "crperezt",
+      "name": "Carlos Perez",
+      "avatar_url": "https://avatars0.githubusercontent.com/u/20329014?v=4",
+      "profile": "https://github.com/crperezt",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "JayArya",
+      "name": "Jayant Arya",
+      "avatar_url": "https://avatars0.githubusercontent.com/u/42388314?v=4",
+      "profile": "https://github.com/JayArya",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "JohnRawlins",
+      "name": "John Rawlins",
+      "avatar_url": "https://avatars3.githubusercontent.com/u/42707277?v=4",
+      "profile": "https://github.com/JohnRawlins",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "lepasq",
+      "name": "lepasq",
+      "avatar_url": "https://avatars3.githubusercontent.com/u/53230128?v=4",
+      "profile": "https://github.com/lepasq",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "mrfelfel",
+      "name": "mrfelfel",
+      "avatar_url": "https://avatars0.githubusercontent.com/u/19575588?v=4",
+      "profile": "https://github.com/mrfelfel",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "gorogoroumaru",
+      "name": "gorogoroumaru",
+      "avatar_url": "https://avatars3.githubusercontent.com/u/30716350?v=4",
+      "profile": "https://twitter.com/gorogoroumaru",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "ruisaraiva19",
+      "name": "Rui Saraiva",
+      "avatar_url": "https://avatars2.githubusercontent.com/u/7356098?v=4",
+      "profile": "http://ruisaraiva.dev",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "MBakirci",
+      "name": "Mehmet Bakirci",
+      "avatar_url": "https://avatars2.githubusercontent.com/u/9880089?v=4",
+      "profile": "http://www.bakirci.nl",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "JLambertazzo",
+      "name": "Julien Bertazzo Lambert",
+      "avatar_url": "https://avatars0.githubusercontent.com/u/42924425?v=4",
+      "profile": "https://github.com/JLambertazzo",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "sidthesloth92",
+      "name": "Dinesh Balaji",
+      "avatar_url": "https://avatars3.githubusercontent.com/u/4656109?v=4",
+      "profile": "http://dbwriteups.wordpress.com",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "med1001",
+      "name": "MedBMoussa",
+      "avatar_url": "https://avatars3.githubusercontent.com/u/26111211?v=4",
+      "profile": "https://github.com/med1001",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "lucievr",
+      "name": "Lucie Vrsovska",
+      "avatar_url": "https://avatars.githubusercontent.com/u/46979603?v=4",
+      "profile": "http://www.lucie.dev",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "jcabak",
+      "name": "Jakub Cabak",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1818155?v=4",
+      "profile": "https://github.com/jcabak",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "durgakiran",
+      "name": "Palakurthi Durga Kiran Kumar",
+      "avatar_url": "https://avatars.githubusercontent.com/u/17452039?v=4",
+      "profile": "https://github.com/durgakiran",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "karllabrador",
+      "name": "Karl Labrador",
+      "avatar_url": "https://avatars.githubusercontent.com/u/58193703?v=4",
+      "profile": "https://github.com/karllabrador",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "rishichawda",
+      "name": "Rishi Kumar Chawda",
+      "avatar_url": "https://avatars.githubusercontent.com/u/26366288?v=4",
+      "profile": "http://rishikc.com",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "contributorsPerLine": 5,
   "projectName": "responsively-app",
-  "projectOwner": "manojVivek",
+  "projectOwner": "responsively-org",
   "repoType": "github",
   "repoHost": "https://github.com",
   "skipCi": true,

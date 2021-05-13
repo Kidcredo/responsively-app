@@ -1,7 +1,9 @@
-import React, {useState, useEffect} from 'react';
+import React, {useState, useEffect, useMemo} from 'react';
+import cx from 'classnames';
 import {ipcRenderer} from 'electron';
 import {Resizable} from 're-resizable';
 import {Tooltip} from '@material-ui/core';
+import pubsub from 'pubsub.js';
 import debounce from 'lodash/debounce';
 import styles from './style.module.css';
 import Cross from '../icons/Cross';
@@ -10,6 +12,8 @@ import DockBottom from '../icons/DockBottom';
 import InspectElementChrome from '../icons/InspectElementChrome';
 import {DEVTOOLS_MODES} from '../../constants/previewerLayouts';
 import CrossChrome from '../icons/CrossChrome';
+import {OPEN_CONSOLE_FOR_DEVICE} from '../../constants/pubsubEvents';
+import {DARK_THEME, LIGHT_THEME} from '../../constants/theme';
 
 const getResizingDirections = mode => {
   if (mode === DEVTOOLS_MODES.RIGHT) {
@@ -33,6 +37,8 @@ const getToolbarPosition = (mode, bounds) => {
 };
 
 const DevToolsResizer = ({
+  activeDevTools,
+  devices,
   size,
   open,
   mode,
@@ -43,6 +49,7 @@ const DevToolsResizer = ({
   onDevToolsModeChange,
   onWindowResize,
   toggleInspector,
+  isDarkTheme,
 }) => {
   useEffect(() => {
     const handler = debounce(
@@ -59,11 +66,19 @@ const DevToolsResizer = ({
     };
   }, []);
 
+  const initialTheme = useMemo(() => (isDarkTheme ? DARK_THEME : LIGHT_THEME), [
+    activeDevTools[0]?.deviceId,
+  ]);
+
   const [sizeBeforeDrag, setSizeBeforeDrag] = useState(null);
 
   if (!open || mode === DEVTOOLS_MODES.UNDOCKED) {
     return null;
   }
+
+  const switchDevTools = e => {
+    pubsub.publish(OPEN_CONSOLE_FOR_DEVICE, [{deviceId: e.target.value}]);
+  };
 
   return (
     <div style={{position: 'absolute', ...getResizerPosition(mode, bounds)}}>
@@ -85,7 +100,10 @@ const DevToolsResizer = ({
         enable={getResizingDirections(mode)}
       >
         <div
-          className={styles.toolbarContainer}
+          className={cx(
+            styles.toolbarContainer,
+            initialTheme === DARK_THEME ? styles.darkMode : styles.lightMode
+          )}
           style={{width: '100%', ...getToolbarPosition(mode, bounds)}}
         >
           <div className={styles.toolsGroup}>
@@ -95,6 +113,21 @@ const DevToolsResizer = ({
                 selected={isInspecting}
               />
             </span>
+            <div className={styles.inputSection}>
+              <span className={styles.labelText}>Device:</span>
+              <select
+                id="devices"
+                onChange={switchDevTools}
+                className={styles.chromeSelect}
+                value={activeDevTools[0].deviceId}
+              >
+                {devices.map(device => (
+                  <option value={device.id} key={device.id}>
+                    {device.name}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
           <div className={styles.toolsGroup}>
             {mode !== DEVTOOLS_MODES.RIGHT ? (

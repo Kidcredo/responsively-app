@@ -20,6 +20,7 @@ import electron, {
   webContents,
   shell,
   dialog,
+  session,
 } from 'electron';
 import settings from 'electron-settings';
 import log from 'electron-log';
@@ -29,9 +30,8 @@ import installExtension, {
   REDUX_DEVTOOLS,
 } from 'electron-devtools-installer';
 import fs from 'fs';
-import console from 'electron-timber';
 import MenuBuilder from './menu';
-import {USER_PREFERENCES} from './constants/settingKeys';
+import {USER_PREFERENCES, NETWORK_CONFIGURATION} from './constants/settingKeys';
 import {migrateDeviceSchema} from './settings/migration';
 import {DEVTOOLS_MODES} from './constants/previewerLayouts';
 import {initMainShortcutManager} from './shortcut-manager/main-shortcut-manager';
@@ -43,19 +43,42 @@ import {
   getBrowserSyncHost,
   getBrowserSyncEmbedScriptURL,
   closeBrowserSync,
+  stopWatchFiles,
+  watchFiles,
 } from './utils/browserSync';
-import {getHostFromURL} from './utils/urlUtils';
+import {getHostFromURL, normalize} from './utils/urlUtils';
+import {getPermissionSettingPreference} from './utils/permissionUtils';
 import browserSync from 'browser-sync';
+import {captureOnSentry} from './utils/logUtils';
+import appMetadata from './services/db/appMetadata';
+import {convertToProxyConfig} from './utils/proxyUtils';
+import {PERMISSION_MANAGEMENT_OPTIONS} from './constants/permissionsManagement';
+import {endSession, startSession} from './utils/analytics';
 
 const path = require('path');
-const chokidar = require('chokidar');
 const URL = require('url').URL;
+
+const HOME_PAGE = 'HOME_PAGE';
+const LAST_OPENED_ADDRESS = 'LAST_OPENED_ADDRESS';
 
 migrateDeviceSchema();
 
 if (process.env.NODE_ENV !== 'development') {
   Sentry.init({
     dsn: 'https://f2cdbc6a88aa4a068a738d4e4cfd3e12@sentry.io/1553155',
+    environment: process.env.NODE_ENV,
+    beforeSend: (event, hint) => {
+      // Suppress address already in use error
+      if (
+        (event?.exception?.values?.[0]?.value || '').indexOf(
+          'listen EADDRINUSE: address already in use'
+        ) > -1
+      ) {
+        return null;
+      }
+      event.tags = {appVersion: app.getVersion()};
+      return event;
+    },
   });
 }
 
@@ -69,6 +92,7 @@ let devToolsView = null;
 let fileToOpen = null;
 
 const httpAuthCallbacks = {};
+const permissionCallbacks = {};
 
 if (process.env.NODE_ENV === 'production') {
   const sourceMapSupport = require('source-map-support');
@@ -95,6 +119,13 @@ const openWithHandler = filePath => {
   return false;
 };
 
+const setProxyOnStart = () => {
+  const proxyConfig = (settings.get(NETWORK_CONFIGURATION) || {}).proxy;
+  if (proxyConfig != null && proxyConfig.active) {
+    session.defaultSession.setProxy(convertToProxyConfig(proxyConfig));
+  }
+};
+
 /**
  * Add event listeners...
  */
@@ -113,6 +144,15 @@ app.on('will-finish-launching', () => {
       app.setAsDefaultProtocolClient(protocol);
     }
   }
+  if (
+    !fileToOpen &&
+    !urlToOpen &&
+    process.argv.length >= 2 &&
+    !openWithHandler(process.argv[1]) &&
+    isURL(process.argv[1], {protocols: ['http', 'https', 'file']})
+  ) {
+    urlToOpen = process.argv[1];
+  }
 });
 
 app.on('open-file', async (event, filePath) => {
@@ -125,7 +165,7 @@ app.on('open-file', async (event, filePath) => {
     if (mainWindow) {
       openFile(fileToOpen);
     } else if (!hasActiveWindow) {
-      createWindow();
+      await createWindow();
     }
   }
 });
@@ -136,12 +176,13 @@ app.on('open-url', async (event, url) => {
   } else {
     urlToOpen = url;
     if (!hasActiveWindow) {
-      createWindow();
+      await createWindow();
     }
   }
 });
 
 app.on('window-all-closed', () => {
+  endSession();
   hasActiveWindow = false;
   ipcMain.removeAllListeners();
   ipcMain.removeHandler('install-extension');
@@ -172,25 +213,49 @@ app.on(
 app.on('login', (event, webContents, request, authInfo, callback) => {
   event.preventDefault();
   const {url} = request;
-  if (httpAuthCallbacks[url]) {
-    return httpAuthCallbacks[url].push(callback);
+  if (authInfo.isProxy) {
+    const proxyConfig = (settings.get(NETWORK_CONFIGURATION) || {}).proxy;
+    if (proxyConfig != null && proxyConfig.active) {
+      const schConfig =
+        proxyConfig[url.substr(0, url.indexOf(':')).toLowerCase()];
+      if (schConfig != null && !schConfig.useDefault) {
+        callback(schConfig.user, schConfig.password);
+      } else {
+        callback(proxyConfig.default.user, proxyConfig.default.password);
+      }
+    }
+  } else {
+    if (httpAuthCallbacks[url]) {
+      return httpAuthCallbacks[url].push(callback);
+    }
+    httpAuthCallbacks[url] = [callback];
+    mainWindow.webContents.send('http-auth-prompt', {url});
   }
-  httpAuthCallbacks[url] = [callback];
-  mainWindow.webContents.send('http-auth-prompt', {url});
 });
 
-app.on('activate', (event, hasVisibleWindows) => {
+ipcMain.on('set-proxy-profile', async (_, proxyProfile) => {
+  if (proxyProfile == null || proxyProfile.length === 0) return;
+  await session.defaultSession.clearAuthCache();
+  await session.defaultSession.setProxy(proxyProfile);
+});
+
+app.on('activate', async (event, hasVisibleWindows) => {
   if (hasVisibleWindows || hasActiveWindow) {
     return;
   }
-  createWindow();
+  await createWindow();
 });
 
-app.on('ready', () => {
+app.on('ready', async () => {
   if (hasActiveWindow) {
     return;
   }
-  createWindow();
+  // Set theme based on user preference
+  const themeSource = (settings.get(USER_PREFERENCES) || {}).theme;
+  if (themeSource) {
+    nativeTheme.themeSource = themeSource;
+  }
+  await createWindow();
 });
 
 const chooseOpenWindowHandler = url => {
@@ -228,18 +293,32 @@ const installExtensions = async () => {
 const openUrl = url => {
   mainWindow.webContents.send(
     'address-change',
-    url.replace(`${protocol}://`, '')
+    normalize(url.replace(`${protocol}://`, ''))
   );
   mainWindow.show();
 };
 
 const openFile = filePath => {
-  mainWindow.webContents.send('address-change', filePath);
+  mainWindow.webContents.send('address-change', normalize(filePath));
   mainWindow.show();
 };
 
+function getUserPreferences(): UserPreferenceType {
+  return settings.get(USER_PREFERENCES) || {};
+}
+
+function getLastOpenedAddress() {
+  return settings.get(LAST_OPENED_ADDRESS) || getHomepage();
+}
+
+function getHomepage() {
+  return settings.get(HOME_PAGE) || 'https://www.google.com/';
+}
+
 const createWindow = async () => {
+  appMetadata.incrementOpenCount();
   hasActiveWindow = true;
+  setProxyOnStart();
 
   if (process.env.NODE_ENV === 'development') {
     await installExtensions();
@@ -262,26 +341,37 @@ const createWindow = async () => {
     icon: iconPath,
   });
 
+  await initBrowserSync();
+  ipcMain.handle('request-browser-sync', (event, data) => {
+    const browserSyncOptions = {
+      url: getBrowserSyncEmbedScriptURL(),
+    };
+    return browserSyncOptions;
+  });
+
   mainWindow.loadURL(`file://${__dirname}/app.html`);
 
   mainWindow.webContents.on('did-finish-load', () => {
+    startSession();
     if (process.platform === 'darwin') {
       // Trick to make the transparent title bar draggable
-      mainWindow.webContents.executeJavaScript(`
-        var div = document.createElement("div");
-        div.style.position = "absolute";
-        div.style.top = 0;
-        div.style.height = "23px";
-        div.style.width = "100%";
-        div.style["-webkit-app-region"] = "drag";
-        div.style['-webkit-user-select'] = 'none';
-        document.body.appendChild(div);
-        true;
-      `);
+      mainWindow.webContents
+        .executeJavaScript(
+          `
+            var div = document.createElement("div");
+            div.style.position = "absolute";
+            div.style.top = 0;
+            div.style.height = "23px";
+            div.style.width = "100%";
+            div.style["-webkit-app-region"] = "drag";
+            div.style['-webkit-user-select'] = 'none';
+            document.body.appendChild(div);
+            true;
+          `
+        )
+        .catch(captureOnSentry);
     }
   });
-
-  await initBrowserSync();
 
   initMainShortcutManager();
 
@@ -300,35 +390,121 @@ const createWindow = async () => {
       openFile(fileToOpen);
       fileToOpen = null;
     } else {
+      openUrl(
+        getUserPreferences().reopenLastAddress
+          ? getLastOpenedAddress()
+          : getHomepage()
+      );
       mainWindow.show();
     }
+    mainWindow.maximize();
     onResize();
   });
 
-  const watcher = new chokidar.FSWatcher();
-  let watchedFileInfo = null;
-  watcher.on('change', _ => {
-    mainWindow.webContents.send('reload-url');
+  session.defaultSession.setPermissionRequestHandler(
+    (webContents, permission, callback, details) => {
+      const preferences = getPermissionSettingPreference();
+
+      const reqUrl = webContents.getURL();
+
+      if (permissionCallbacks[reqUrl] == null) permissionCallbacks[reqUrl] = {};
+
+      if (permissionCallbacks[reqUrl][permission] == null) {
+        permissionCallbacks[reqUrl][permission] = {
+          called: false,
+          allowed: null,
+          callbacks: [],
+        };
+      }
+
+      const entry = permissionCallbacks[reqUrl][permission];
+
+      if (preferences === PERMISSION_MANAGEMENT_OPTIONS.ALLOW_ALWAYS) {
+        entry.callbacks.forEach(callback => callback(true));
+        entry.callbacks = [];
+        entry.allowed = true;
+        entry.called = true;
+        return callback(true);
+      }
+      if (preferences === PERMISSION_MANAGEMENT_OPTIONS.DENY_ALWAYS) {
+        entry.callbacks.forEach(callback => callback(false));
+        entry.callbacks = [];
+        entry.allowed = false;
+        entry.called = true;
+        return callback(false);
+      }
+
+      if (entry.called) {
+        if (entry.allowed == null) return;
+        return callback(entry.allowed);
+      }
+
+      if (entry.callbacks.length === 0) {
+        entry.callbacks.push(callback);
+
+        mainWindow.webContents.send('permission-prompt', {
+          url: reqUrl,
+          permission,
+          details,
+        });
+      } else {
+        entry.callbacks.push(callback);
+      }
+    }
+  );
+
+  session.defaultSession.setPermissionCheckHandler(
+    (webContents, permission) => {
+      const reqUrl = webContents.getURL();
+
+      let entry = permissionCallbacks[reqUrl];
+      if (entry != null) entry = entry[permission];
+
+      if (entry == null || !entry.called) {
+        return null;
+      }
+
+      return entry.allowed;
+    }
+  );
+
+  ipcMain.on('permission-response', (evnt, ...args) => {
+    if (args[0] == null) return;
+    const {url, permission, allowed} = args[0];
+
+    let entry = permissionCallbacks[url];
+    if (entry != null) entry = entry[permission];
+
+    if (entry != null && !entry.called) {
+      entry.called = true;
+      entry.allowed = allowed;
+      if (allowed != null)
+        entry.callbacks.forEach(callback => callback(allowed));
+      entry.callbacks = [];
+    }
   });
-  ipcMain.on('start-watching-file', (event, fileInfo) => {
+
+  ipcMain.on('reset-ignored-permissions', evnt => {
+    Object.entries(permissionCallbacks).forEach(([_, permissions]) => {
+      Object.entries(permissions).forEach(([_, entry]) => {
+        if (entry.called && entry.allowed == null) entry.called = false;
+        entry.callbacks = [];
+      });
+    });
+  });
+
+  ipcMain.on('start-watching-file', async (event, fileInfo) => {
     let path = fileInfo.path.replace('file://', '');
     if (process.platform === 'win32') {
       path = trimStart(path, '/');
     }
     app.addRecentDocument(path);
-    fileInfo.path = path;
-    if (watchedFileInfo != null) watcher.unwatch(watchedFileInfo.path);
-    if (fs.existsSync(fileInfo.path)) {
-      watcher.add(fileInfo.path);
-      watchedFileInfo = fileInfo;
-    } else {
-      watchedFileInfo = null;
-    }
+    await stopWatchFiles();
+    watchFiles(path);
   });
 
-  ipcMain.on('stop-watcher', () => {
-    if (watcher != null && watchedFileInfo != null)
-      watcher.unwatch(watchedFileInfo.path);
+  ipcMain.on('stop-watcher', async () => {
+    await stopWatchFiles();
   });
 
   ipcMain.on('open-new-window', (event, data) => {
@@ -368,7 +544,10 @@ const createWindow = async () => {
   });
 
   ipcMain.on('prefers-color-scheme-select', (event, scheme) => {
-    nativeTheme.themeSource = scheme || 'system';
+    if (!scheme) {
+      return;
+    }
+    nativeTheme.themeSource = scheme;
   });
 
   ipcMain.handle('install-extension', (event, extensionId) => {
@@ -420,13 +599,6 @@ const createWindow = async () => {
     }
   });
 
-  ipcMain.handle('request-browser-sync', (event, data) => {
-    const browserSyncOptions = {
-      url: getBrowserSyncEmbedScriptURL(),
-    };
-    return browserSyncOptions;
-  });
-
   ipcMain.on('open-devtools', (event, ...args) => {
     const {webViewId, bounds, mode} = args[0];
     if (!webViewId) {
@@ -443,22 +615,26 @@ const createWindow = async () => {
     devToolsView.setBounds(bounds);
     webView.setDevToolsWebContents(devToolsView.webContents);
     webView.openDevTools();
-    devToolsView.webContents.executeJavaScript(`
-      (async function () {
-        const sleep = ms => (new Promise(resolve => setTimeout(resolve, ms)));
-        var retryCount = 0;
-        var done = false;
-        while(retryCount < 10 && !done) {
-          try {
-            retryCount++;
-            document.querySelectorAll('div[slot="insertion-point-main"]')[0].shadowRoot.querySelectorAll('.tabbed-pane-left-toolbar.toolbar')[0].style.display = 'none'
-            done = true
-          } catch(err){
-            await sleep(100);
-          }
-        }
-      })()
-    `);
+    devToolsView.webContents
+      .executeJavaScript(
+        `
+          (async function () {
+            const sleep = ms => (new Promise(resolve => setTimeout(resolve, ms)));
+            var retryCount = 0;
+            var done = false;
+            while(retryCount < 10 && !done) {
+              try {
+                retryCount++;
+                document.querySelectorAll('div[slot="insertion-point-main"]')[0].shadowRoot.querySelectorAll('.tabbed-pane-left-toolbar.toolbar')[0].style.display = 'none'
+                done = true
+              } catch(err){
+                await sleep(100);
+              }
+            }
+          })()
+        `
+      )
+      .catch(captureOnSentry);
   });
 
   ipcMain.on('close-devtools', (event, ...args) => {
@@ -488,8 +664,17 @@ const createWindow = async () => {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
-    if (watcher != null) watcher.close();
   });
+
+  mainWindow.webContents.on(
+    'new-window',
+    (event, url, frameName, disposition, options) => {
+      if (url?.indexOf('headwayapp.co') !== -1) {
+        event.preventDefault();
+        shell.openExternal(url);
+      }
+    }
+  );
 
   const menuBuilder = new MenuBuilder(mainWindow);
   menuBuilder.buildMenu();
@@ -499,5 +684,7 @@ const createWindow = async () => {
     mainWindow.webContents.send('updater-status-changed', {nextStatus});
   });
   // Remove this if your app does not use auto updates
-  appUpdater.checkForUpdatesAndNotify();
+  appUpdater
+    .checkForUpdatesAndNotify()
+    .catch(err => console.log('Error while updating app', err));
 };
