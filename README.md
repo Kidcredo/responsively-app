@@ -65,7 +65,7 @@ Please visit the website to know more about the application - https://responsive
 
 
 ## Download
-The application is available for Mac, Windows and Linux platforms. Please download it from here - https://github.com/responsively-org/responsively-app/releases
+The application is available for Mac, Windows and Linux platforms. Please download it from [the releases page](https://github.com/responsively-org/responsively-app/releases)
 
 Alternatively, MacOS users can use [`brew`](https://formulae.brew.sh/cask/responsively) <a href="https://formulae.brew.sh/cask/responsively" target="_blank"> <img src="https://badgen.net/homebrew/cask/dy/responsively" alt="Homebrew installs"></a>
 ```bash
@@ -82,10 +82,12 @@ or [`winget`](https://github.com/microsoft/winget-cli):
 winget install ResponsivelyApp
 ```
 
-Linux users can use `rpm`
+Linux users using an RPM Package Manager can use `rpm`
 ```bash
 sudo rpm -i https://github.com/responsively-org/responsively-app/releases/download/v[VERSION]/Responsively-App-[VERSION].x86_64.rpm
 ```
+
+otherwise download an AppImage from [the releases page](https://github.com/responsively-org/responsively-app/releases)
 
 Follow on Twitter for future updates - [![Twitter Follow](https://img.shields.io/twitter/follow/ResponsivelyApp?style=social)](https://twitter.com/ResponsivelyApp)
 
@@ -101,6 +103,18 @@ If you face any problems while using the application, please open an issue here 
 
 ## Roadmap
 Here is the roadmap of the desktop app - https://github.com/responsively-org/responsively-app/projects/12?fullscreen=true.
+
+## Gold sponsors 🥇
+
+<p>&nbsp;</p>
+
+<p align="center">
+  <a href="https://mockswitch.com/" target="_blank">
+    <img src="https://responsively.app/static/MockSwitch-6b7ae7d9bc8df23ac41a4e653f71c9bf.jpg" height="120px">
+  </a>
+</p>
+
+[Become a sponsor and have your company logo here](https://opencollective.com/responsively)
 
 ## Contribute
 1. Ensure you have installed `node` and `yarn`
@@ -182,6 +196,11 @@ Thanks go to these wonderful people ([emoji key](https://allcontributors.org/doc
     <td align="center"><a href="https://github.com/durgakiran"><img src="https://avatars.githubusercontent.com/u/17452039?v=4?s=100" width="100px;" alt=""/><br /><sub><b>Palakurthi Durga Kiran Kumar</b></sub></a><br /><a href="https://github.com/responsively-org/responsively-app/commits?author=durgakiran" title="Code">💻</a></td>
     <td align="center"><a href="https://github.com/karllabrador"><img src="https://avatars.githubusercontent.com/u/58193703?v=4?s=100" width="100px;" alt=""/><br /><sub><b>Karl Labrador</b></sub></a><br /><a href="https://github.com/responsively-org/responsively-app/commits?author=karllabrador" title="Code">💻</a></td>
     <td align="center"><a href="http://rishikc.com"><img src="https://avatars.githubusercontent.com/u/26366288?v=4?s=100" width="100px;" alt=""/><br /><sub><b>Rishi Kumar Chawda</b></sub></a><br /><a href="https://github.com/responsively-org/responsively-app/commits?author=rishichawda" title="Code">💻</a></td>
+  </tr>
+  <tr>
+    <td align="center"><a href="https://github.com/crocarneiro"><img src="https://avatars.githubusercontent.com/u/10589421?v=4?s=100" width="100px;" alt=""/><br /><sub><b>Carlos Rafael de Oliveira Carneiro</b></sub></a><br /><a href="https://github.com/responsively-org/responsively-app/commits?author=crocarneiro" title="Code">💻</a></td>
+    <td align="center"><a href="http://zachos.tech"><img src="https://avatars.githubusercontent.com/u/50255197?v=4?s=100" width="100px;" alt=""/><br /><sub><b>Zach Hoskins</b></sub></a><br /><a href="https://github.com/responsively-org/responsively-app/commits?author=zachOS-tech" title="Code">💻</a></td>
+    <td align="center"><a href="https://github.com/kiwan97"><img src="https://avatars.githubusercontent.com/u/25267859?v=4?s=100" width="100px;" alt=""/><br /><sub><b>KIWAN KIM</b></sub></a><br /><a href="https://github.com/responsively-org/responsively-app/commits?author=kiwan97" title="Code">💻</a></td>
   </tr>
 </table>
 

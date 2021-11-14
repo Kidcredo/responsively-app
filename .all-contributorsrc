@@ -415,6 +415,33 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "crocarneiro",
+      "name": "Carlos Rafael de Oliveira Carneiro",
+      "avatar_url": "https://avatars.githubusercontent.com/u/10589421?v=4",
+      "profile": "https://github.com/crocarneiro",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "zachOS-tech",
+      "name": "Zach Hoskins",
+      "avatar_url": "https://avatars.githubusercontent.com/u/50255197?v=4",
+      "profile": "http://zachos.tech",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "kiwan97",
+      "name": "KIWAN KIM",
+      "avatar_url": "https://avatars.githubusercontent.com/u/25267859?v=4",
+      "profile": "https://github.com/kiwan97",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "contributorsPerLine": 5,
